@@ -195,10 +195,10 @@ public class NativeAudio: CAPPlugin {
 
     private func preloadAsset(_ call: CAPPluginCall, isComplex complex: Bool) {
         let audioId = call.getString(Constant.AssetIdKey) ?? ""
-        let channels: NSNumber?
-        let volume: Float?
-        let delay: NSNumber?
-        let isUrl: Bool?
+        var channels: NSNumber?
+        var volume: Float?
+        var delay: NSNumber?
+        var isUrl: Bool?
 
         if audioId != "" {
             let assetPath: String = call.getString(Constant.AssetPathKey) ?? ""
@@ -225,24 +225,23 @@ public class NativeAudio: CAPPlugin {
             queue.async {
                 if asset == nil {
                     var basePath: String?
+                    
                     if isUrl == false {
                         let assetPathSplit = assetPath.components(separatedBy: ".")
                         basePath = Bundle.main.path(forResource: assetPathSplit[0], ofType: assetPathSplit[1])
                     } else {
-                        let url = URL(string: assetPath)
-                        basePath = url!.path
+                        basePath = self.downloadAssetFile(assetPath)
                     }
 
-                    if FileManager.default.fileExists(atPath: basePath ?? "") {
+                    if let basePath = basePath, FileManager.default.fileExists(atPath: basePath) {
                         if !complex {
-                            let pathUrl = URL(fileURLWithPath: basePath ?? "")
-                            let soundFileUrl: CFURL = CFBridgingRetain(pathUrl) as! CFURL
+                            let pathUrl = URL(fileURLWithPath: basePath)
                             var soundId = SystemSoundID()
-                            AudioServicesCreateSystemSoundID(soundFileUrl, &soundId)
+                            AudioServicesCreateSystemSoundID(pathUrl as CFURL, &soundId)
                             self.audioList[audioId] = NSNumber(value: Int32(soundId))
                             call.resolve()
                         } else {
-                            let audioAsset: AudioAsset = AudioAsset(owner: self, withAssetId: audioId, withPath: basePath, withChannels: channels, withVolume: volume as NSNumber?, withFadeDelay: delay)
+                            let audioAsset = AudioAsset(owner: self, withAssetId: audioId, withPath: basePath, withChannels: channels, withVolume: volume as NSNumber?, withFadeDelay: delay)
                             self.audioList[audioId] = audioAsset
                             call.resolve()
                         }
@@ -254,6 +253,21 @@ public class NativeAudio: CAPPlugin {
                 }
             }
         }
+    }
+    
+    private func downloadAssetFile(_ fileUrl: String) -> String? {
+        if let url = URL(string: fileUrl),
+            let data = try? Data(contentsOf: url),
+            let basePath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.appendingPathComponent(url.lastPathComponent) {
+            do {
+                try data.write(to: basePath)
+                return basePath.path
+            } catch {
+                print(error.localizedDescription)
+                return nil
+            }
+        }
+        return nil
     }
 
     private func stopAudio(audioId: String) throws {

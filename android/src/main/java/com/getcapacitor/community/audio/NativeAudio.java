@@ -28,7 +28,14 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import java.io.File;
+import java.io.FileDescriptor;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
+import java.net.URL;
+import java.net.URLConnection;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.concurrent.Callable;
@@ -372,73 +379,71 @@ public class NativeAudio extends Plugin implements AudioManager.OnAudioFocusChan
         notifyListeners("complete", ret);
     }
 
-    private void preloadAsset(PluginCall call) {
-        double volume = 1.0;
-        int audioChannelNum = 1;
+  private void preloadAsset(PluginCall call) {
+    double volume = 1.0;
+    int audioChannelNum = 1;
 
-        try {
-            initSoundPool();
+    try {
+      initSoundPool();
 
-            String audioId = call.getString(ASSET_ID);
+      String audioId = call.getString(ASSET_ID);
 
-            boolean isUrl = call.getBoolean("isUrl", false);
+      boolean isUrl = call.getBoolean("isUrl", false);
 
-            if (!isStringValid(audioId)) {
-                call.reject(ERROR_AUDIO_ID_MISSING + " - " + audioId);
-                return;
-            }
+      if (!isStringValid(audioId)) {
+        call.reject(ERROR_AUDIO_ID_MISSING + " - " + audioId);
+        return;
+      }
 
-            if (!audioAssetList.containsKey(audioId)) {
-                String assetPath = call.getString(ASSET_PATH);
+      if (!audioAssetList.containsKey(audioId)) {
+        String assetPath = call.getString(ASSET_PATH);
 
-                if (!isStringValid(assetPath)) {
-                    call.reject(ERROR_ASSET_PATH_MISSING + " - " + audioId + " - " + assetPath);
-                    return;
-                }
-
-                String fullPath = assetPath; //"raw/".concat(assetPath);
-
-                if (call.getDouble(VOLUME) == null) {
-                    volume = 1.0;
-                } else {
-                    volume = call.getDouble(VOLUME, 0.5);
-                }
-
-                if (call.getInt(AUDIO_CHANNEL_NUM) == null) {
-                    audioChannelNum = 1;
-                } else {
-                    audioChannelNum = call.getInt(AUDIO_CHANNEL_NUM);
-                }
-
-                AssetFileDescriptor assetFileDescriptor;
-                if (isUrl) {
-                    File f = new File(new URI(fullPath));
-                    ParcelFileDescriptor p = ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY);
-                    assetFileDescriptor = new AssetFileDescriptor(p, 0, -1);
-                } else {
-                    if (fullPath.startsWith("content")) {
-                        assetFileDescriptor =
-                            getBridge().getActivity().getContentResolver().openAssetFileDescriptor(Uri.parse(fullPath), "r");
-                    } else {
-                        Context ctx = getBridge().getActivity().getApplicationContext();
-                        AssetManager am = ctx.getResources().getAssets();
-                        assetFileDescriptor = am.openFd(fullPath);
-                    }
-                }
-
-                AudioAsset asset = new AudioAsset(this, audioId, assetFileDescriptor, audioChannelNum, (float) volume);
-                audioAssetList.put(audioId, asset);
-
-                JSObject status = new JSObject();
-                status.put("STATUS", "OK");
-                call.resolve(status);
-            } else {
-                call.reject(ERROR_AUDIO_EXISTS);
-            }
-        } catch (Exception ex) {
-            call.reject(ex.getMessage());
+        if (!isStringValid(assetPath)) {
+          call.reject(ERROR_ASSET_PATH_MISSING + " - " + audioId + " - " + assetPath);
+          return;
         }
+
+        String fullPath = assetPath; //"raw/".concat(assetPath);
+
+        if (call.getDouble(VOLUME) == null) {
+          volume = 1.0;
+        } else {
+          volume = call.getDouble(VOLUME, 0.5);
+        }
+
+        if (call.getInt(AUDIO_CHANNEL_NUM) == null) {
+          audioChannelNum = 1;
+        } else {
+          audioChannelNum = call.getInt(AUDIO_CHANNEL_NUM);
+        }
+
+        AssetFileDescriptor assetFileDescriptor;
+
+        if (isUrl) {
+          assetFileDescriptor = downloadAssetFileDescriptor(fullPath);
+        } else {
+          if (fullPath.startsWith("content")) {
+            assetFileDescriptor = getBridge().getActivity().getContentResolver().openAssetFileDescriptor(Uri.parse(fullPath), "r");
+          } else {
+            Context ctx = getBridge().getActivity().getApplicationContext();
+            AssetManager am = ctx.getResources().getAssets();
+            assetFileDescriptor = am.openFd(fullPath);
+          }
+        }
+
+        AudioAsset asset = new AudioAsset(this, audioId, assetFileDescriptor, audioChannelNum, (float) volume);
+        audioAssetList.put(audioId, asset);
+
+        JSObject status = new JSObject();
+        status.put("STATUS", "OK");
+        call.resolve(status);
+      } else {
+        call.reject(ERROR_AUDIO_EXISTS);
+      }
+    } catch (Exception ex) {
+      call.reject(ex.getMessage());
     }
+  }
 
     private void playOrLoop(String action, final PluginCall call) {
         try {
@@ -478,4 +483,33 @@ public class NativeAudio extends Plugin implements AudioManager.OnAudioFocusChan
     private boolean isStringValid(String value) {
         return (value != null && !value.isEmpty() && !value.equals("null"));
     }
+
+  private AssetFileDescriptor downloadAssetFileDescriptor(String fileUrl) throws IOException {
+    URL url = new URL(fileUrl);
+    URLConnection connection = url.openConnection();
+    connection.connect();
+
+    InputStream inputStream = connection.getInputStream();
+
+    File file = File.createTempFile("temp", null);
+
+    FileOutputStream fileOutputStream = new FileOutputStream(file);
+
+    copyStream(inputStream, fileOutputStream);
+
+    inputStream.close();
+    fileOutputStream.close();
+
+    ParcelFileDescriptor pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
+
+    return new AssetFileDescriptor(pfd, 0, -1);
+  }
+
+  private void copyStream(InputStream input, FileOutputStream output) throws IOException {
+    byte[] buffer = new byte[1024];
+    int bytesRead;
+    while ((bytesRead = input.read(buffer)) != -1) {
+      output.write(buffer, 0, bytesRead);
+    }
+  }
 }
